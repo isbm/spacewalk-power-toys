@@ -387,7 +387,6 @@ exit;
 header;
 
 # Checks
-correct_location;
 can_sudo;
 check_env;
 
@@ -401,16 +400,20 @@ if { [ "$MODE" = "-h" ] || [ "$MODE" = "" ]; } then
     usage;
 else
     if [ "$MODE" = "-r" ]; then
+	correct_location;
 	rebuild_all;
 	deploy_webapp;
 	deploy_binary;
     elif [ "$MODE" = "-w" ]; then
+	correct_location;
 	refresh_webapp;
 	deploy_webapp;
     elif [ "$MODE" = "-b" ]; then
+	correct_location;
 	refresh_bin;
 	deploy_binary;
     elif [ "$MODE" = "-a" ]; then
+	correct_location;
 	refresh_webapp;
 	refresh_bin;
 	deploy_webapp;
