@@ -39,6 +39,9 @@
 #       to the main Spacewalk development environment.
 
 
+ABOUT="Automated Spacewalk Environment Tool, version 0.1"
+
+
 function check_env() {
 #
 # Check if all required commands are in place.
@@ -47,7 +50,8 @@ function check_env() {
     for cmd in "rsync" "ant" "javac" \
                "ssh" "hostname" "awk" \
                "cat" "pwd" "curl" "sudo" \
-               "sed" "yum" "grep" "basename"; do
+               "sed" "yum" "grep" "basename" \
+               "dialog"; do
 	LOC=`which $cmd 2>/dev/null`
 	if [ -z $LOC ]; then
 	    echo "Error: '$cmd' is missing."
@@ -56,6 +60,8 @@ function check_env() {
     done
 
     if [ "$EXIT" = "1" ]; then
+	echo
+	echo "Hint: Hey, maybe run with --init-environment option, perhaps?"
 	echo
 	exit;
     fi
@@ -243,6 +249,93 @@ function utl_url_find_package() {
 }
 
 
+function utl_is_applicable() {
+#
+# Check if system operations are applicable to the environment.
+#
+    if { [ ! -f /etc/redhat-release ] || [ -z $(which yum 2>/dev/null) ]; } then
+	echo "Error: You supposed to run me on latest RHEL or its clone."
+	echo
+
+	exit;
+    fi
+}
+
+
+function setup_init_environment() {
+#
+# Init all the environment
+#
+    utl_is_applicable;
+
+    if [ -z $(which dialog 2>/dev/null) ]; then
+	echo
+	echo "Wait a little, installing a missing bit..."
+	echo
+	sudo yum --assumeyes install dialog > /dev/null
+    fi
+
+    OUTPUT="/tmp/build-spacewalk.upgrade.$$.tmp"
+
+    # Upgrade system
+    sudo yum --assumeyes upgrade > $OUTPUT &
+    dialog  --backtitle "$ABOUT" --clear --title "System Upgrade" --tailbox $OUTPUT 20 70
+    while [ `pgrep yum` ]; do # Bypass "Exit" while Yum is running
+	dialog  --backtitle "$ABOUT" --clear --title "System Upgrade" --tailbox $OUTPUT 20 70
+    done
+
+    # Install stuff
+    sudo yum --assumeyes install openssh-clients rsync > $OUTPUT &
+    dialog  --backtitle "$ABOUT" --clear --title "Installing additional packages" --tailbox $OUTPUT 20 70
+    while [ `pgrep yum` ]; do # Bypass "Exit" while Yum is running
+	dialog  --backtitle "$ABOUT" --clear --title "Installing additional packages" --tailbox $OUTPUT 20 70
+    done
+
+    # Setup SE Linux
+    clear
+    if [ -z $(cat /etc/selinux/config | grep disabled) ]; then
+	dialog --backtitle "$ABOUT" --title "Secure Linux" --yes-label "Got it" \
+               --no-label "I am coward" --yesno "I need to disable SELinux on this machine. May I?" 5 55
+	case $? in
+	    0)
+		SLF="/etc/selinux/config"
+		SLFB="/etc/selinux/config.$$.backup"
+		TSLF="/tmp/selinux-config"
+		sudo mv $SLF $SLFB
+		cat > $TSLF <<EOF
+# Spacewalk development appliance
+# Previous backup: $SLFB"
+SELINUX=disabled
+SELINUXTYPE=targeted
+EOF
+		sudo chmod 0644 $TSLF
+		sudo chown root:root $TSLF
+		sudo mv $TSLF $SLF
+		dialog --backtitle "$ABOUT" --yesno "I've disabled SE Linux, but now I need to reboot." 5 55
+		case $? in
+		    0)
+			clear
+			echo
+			echo "See you soon!"
+			echo
+			sudo shutdown -r now
+			;;
+		    1|255)
+			dialog --backtitle "$ABOUT" --clear --msgbox "Please reboot your system later." 5 55
+			;;
+		esac
+		;;
+	    1|255)
+		dialog --backtitle "$ABOUT" --clear --msgbox "Ah. Well, then I cannot continue." 5 55
+		exit;
+		;;
+	esac
+    fi
+    dialog --backtitle "$ABOUT" --msgbox "Environment has been initialized." 5 55
+    clear
+}
+
+
 function setup_install_spacewalk() {
 #
 # Installs Spacewalk on the localhost.
@@ -341,6 +434,8 @@ function usage() {
 Usage: [setup] <mode> [host]
 
 Setup:
+    --init-environment    Initialize environment to install missing bits.
+
     --generate-config     Generate default configuration.
                           NOTE: It will default to the localhost,
                                 therefore please edit it.
@@ -386,9 +481,6 @@ exit;
 
 header;
 
-# Checks
-can_sudo;
-check_env;
 
 export ANT_HOME=/usr/share/ant
 HOST=$(set_target_host $2)
@@ -399,33 +491,41 @@ TOMCAT_VERSION=$(set_tomcat_version)
 if { [ "$MODE" = "-h" ] || [ "$MODE" = "" ]; } then
     usage;
 else
-    if [ "$MODE" = "-r" ]; then
-	correct_location;
-	rebuild_all;
-	deploy_webapp;
-	deploy_binary;
-    elif [ "$MODE" = "-w" ]; then
-	correct_location;
-	refresh_webapp;
-	deploy_webapp;
-    elif [ "$MODE" = "-b" ]; then
-	correct_location;
-	refresh_bin;
-	deploy_binary;
-    elif [ "$MODE" = "-a" ]; then
-	correct_location;
-	refresh_webapp;
-	refresh_bin;
-	deploy_webapp;
-	deploy_binary;
-    elif [ "$MODE" = "-l" ]; then
-	synchronize_webinf_lib;
-    elif [ "$MODE" = "--generate-config" ]; then
+    if [ "$MODE" = "--generate-config" ]; then
 	setup_generate_config $2 $3;
     elif [ "$MODE" = "--install-spacewalk" ]; then
 	setup_install_spacewalk;
+    elif [ "$MODE" = "--init-environment" ]; then
+	setup_init_environment;
     else
-	usage;
+        # Checks
+	can_sudo;
+	check_env;
+
+	if [ "$MODE" = "-r" ]; then
+	    correct_location;
+	    rebuild_all;
+	    deploy_webapp;
+	    deploy_binary;
+	elif [ "$MODE" = "-w" ]; then
+	    correct_location;
+	    refresh_webapp;
+	    deploy_webapp;
+	elif [ "$MODE" = "-b" ]; then
+	    correct_location;
+	    refresh_bin;
+	    deploy_binary;
+	elif [ "$MODE" = "-a" ]; then
+	    correct_location;
+	    refresh_webapp;
+	    refresh_bin;
+	    deploy_webapp;
+	    deploy_binary;
+	elif [ "$MODE" = "-l" ]; then
+	    synchronize_webinf_lib;
+	else
+	    usage;
+	fi
+	restart_services $HOST
     fi
-    restart_services $HOST
 fi
