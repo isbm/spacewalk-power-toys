@@ -285,7 +285,7 @@ function setup_init_environment() {
     done
 
     # Install stuff
-    sudo yum --assumeyes install openssh-clients rsync > $OUTPUT &
+    sudo yum --assumeyes install openssh-clients rsync system-config-firewall > $OUTPUT &
     dialog  --backtitle "$ABOUT" --clear --title "Installing additional packages" --tailbox $OUTPUT 20 70
     while [ `pgrep yum` ]; do # Bypass "Exit" while Yum is running
 	dialog  --backtitle "$ABOUT" --clear --title "Installing additional packages" --tailbox $OUTPUT 20 70
@@ -331,6 +331,7 @@ EOF
 		;;
 	esac
     fi
+    rm $OUTPUT
     dialog --backtitle "$ABOUT" --msgbox "Environment has been initialized." 5 55
     clear
 }
@@ -340,6 +341,81 @@ function setup_install_spacewalk() {
 #
 # Installs Spacewalk on the localhost.
 #
+ 
+    # Store data to $VALUES variable
+    form=()
+    while [ ${#form[@]} != 15 ];
+    do
+	echo "Again"
+	exec 3>&1
+	VALUES=$(dialog --ok-label "Save" \
+                        --backtitle "$ABOUT" \
+                        --title "Spacewalk Parameters" \
+                        --form "Specify SSL and database parameters for the installation." 22 80 0 \
+	"Admin e-mail:" 1 1 "root@$HOST"    1 30 40 0 \
+	"Organization:" 2 1 "Spacewalk-Org" 2 30 40 0 \
+	"Unit:"         3 1 "spacewalk"     3 30 40 0 \
+	"City:"         4 1 "Nuernberg"     4 30 40 0 \
+	"State:"        5 1 "Germany"       5 30 40 0 \
+	"Country:"      6 1 "DE"            6 30 2 0 \
+	"SSL password:" 7 1 "spacewalk"     7 30 40 0 \
+	"SSL e-mail:"   8 1 "root@$HOST"    8 30 40 0 \
+	"DB Name:"      9 1 "spaceschema"   9 30 25 0 \
+	"DB User:"      10 1 "spaceuser"   10 30 25 0 \
+	"DB Password:"  11 1 "spacewalk"   11 30 25 0 \
+	"DB Host:"      12 1 "$HOST"       12 30 25 0 \
+	"DB Port:"      13 1 "5432"        13 30 4 0 \
+	"Use TFTP (Y/N):" 14 1 "Y"         14 30 1 0 \
+	"Config SSL VHost (Y/N):" 15 1 "Y" 15 30 1 0 \
+	    2>&1 1>&3)
+	exec 3>&-
+
+	i=1
+	for v in $VALUES; do
+	    form[$i]="$v"
+	    (( i++ ))
+	done
+
+	if [ ${#form[@]} != 15 ]; then
+	    dialog --backtitle "$ABOUT" \
+                   --yes-label "Again" \
+                   --no-label "Abort" \
+                   --title "Wrong Parameters" \
+                   --yesno "\nYou should not have empty fields or spaces in values.\n\nWant to try it again?" 10 40
+	    case $? in
+		0)
+		    ;;
+		1|255)
+		    clear
+		    exit
+		    ;;
+	    esac
+	fi
+    done
+
+    ANSWER_FILE="/tmp/build-spacewalk.answer-file.$$.tmp"
+
+    cat > $ANSWER_FILE <<EOF
+admin-email = ${form[1]}
+ssl-set-org = ${form[2]}
+ssl-set-org_unit = ${form[3]}
+ssl-set-city = ${form[4]}
+ssl-set-state = ${form[5]}
+ssl-set-country = ${form[6]}
+ssl-password = ${form[7]}
+ssl-set-email = ${form[8]}
+ssl-config-sslvhost = ${form[15]}
+db-backend = postgresql
+db-name = ${form[9]}
+db-user = ${form[10]}
+db-password = ${form[11]}
+db-host = ${form[12]}
+db-port = ${form[13]}
+enable-tftp = ${form[14]}
+EOF
+    dialog --backtitle "$ABOUT" --title "Spacewalk PostgreSQL Configuration" --no-collapse --msgbox "$(cat $ANSWER_FILE | sort | sed 's/ = /: /' | column -t)" 0 0
+    clear
+
     URL="http://yum.spacewalkproject.org/nightly"
     DST=$(utl_get_distro_name)
     VER=$(utl_get_distro_version)
@@ -348,15 +424,13 @@ function setup_install_spacewalk() {
     # Install repo
     echo "Looking for the Spacewalk repository RPM. Please wait..."
     RPM=$(utl_url_find_package "$URL/$DST/$VER/$PLT/" "spacewalk-repo-")
-    echo "Found: $RPM"
     sudo rpm -Uvh $URL/$DST/$VER/$PLT/$RPM
-
-    # Enable nightly
     sudo sed -i 's/enabled=0/enabled=1/' /etc/yum.repos.d/spacewalk-nightly.repo
     sudo sed -i 's/enabled=1/enabled=0/' /etc/yum.repos.d/spacewalk.repo
 
     # JPackage repo
-    sudo cat > /etc/yum.repos.d/jpackage-generic.repo << EOF
+    JPACK_REPO="/tmp/build-spacewalk.jpackage.$$.tmp"
+    cat > $JPACK_REPO << EOF
 [jpackage-generic]
 name=JPackage generic
 #baseurl=http://mirrors.dotsrc.org/pub/jpackage/5.0/generic/free/
@@ -366,6 +440,8 @@ gpgcheck=1
 gpgkey=http://www.jpackage.org/jpackage.asc
 EOF
 
+    sudo mv $JPACK_REPO /etc/yum.repos.d/jpackage-generic.repo
+
     # EPEL repo
     echo "Looking for the EPEL repository RPM. Please wait..."
     URL="http://dl.fedoraproject.org/pub/epel"
@@ -374,18 +450,23 @@ EOF
     sudo rpm -Uvh $URL/$VER/$PLT/$RPM
 
     # Database server
-    sudo yum install spacewalk-setup-postgresql
+    sudo yum --assumeyes install spacewalk-setup-postgresql
+    sudo /etc/init.d/postgresql start
+
+    echo "Waiting for 10 seconds to make sure PostgreSQL winding-up..."
+    sleep 10
 
     # Install spacewalk
-    sudo yum install spacewalk-postgresql
+    sudo yum --assumeyes install spacewalk-postgresql
 
     # Configure firewall
     sudo system-config-firewall
 
     # Configure Spacewalk
-    sudo spacewalk-setup --disconnected
+    sudo spacewalk-setup --disconnected --answer-file=$ANSWER_FILE
 
     # Finished
+    rm $ANSWER_FILE
     exit;
 }
 
@@ -494,8 +575,11 @@ else
     if [ "$MODE" = "--generate-config" ]; then
 	setup_generate_config $2 $3;
     elif [ "$MODE" = "--install-spacewalk" ]; then
+	can_sudo;
 	setup_install_spacewalk;
     elif [ "$MODE" = "--init-environment" ]; then
+	can_sudo;
+	check_env;
 	setup_init_environment;
     else
         # Checks
