@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -i
 #
 # Copyright (c) 2013, SUSE Linux Products GmbH
 # All rights reserved.
@@ -262,6 +262,83 @@ function utl_is_applicable() {
 }
 
 
+function utl_open_remote_log() {
+#
+# Opens dialog with the remote log tail. :-)
+#
+    LOG_NAME=$(basename $1)
+    OUT=pig.out
+    nohup ssh $USER@$HOST tailf -n $LINES $1 > $OUT 2>/dev/null &
+    PID="$!"
+
+    while [ ! -f $OUT ]; do
+	echo -n "."
+	sleep 0.5;
+    done
+
+    let "HEIGHT = $LINES - 6"
+    let "WIDTH = $COLUMNS- 4"
+
+    dialog --backtitle "$ABOUT" --cr-wrap --clear --title "$LOG_NAME on $HOST" --tailbox $OUT $HEIGHT $WIDTH
+
+    kill -9 $PID
+    rm $OUT
+    clear
+}
+
+
+function utl_open_remote_top() {
+#
+# Opens top on the remote machine.
+#
+    ssh -t $USER@$HOST TERM=vt100 top
+}
+
+
+function setup_monitor() {
+#
+# Remote monitoring
+#
+    while :
+    do
+	cmd=(dialog --no-cancel --backtitle "$ABOUT" --title "Operations on $HOST" --menu "Select operations:" 0 0 0)
+	options=("T" "Tomcat log"
+                 "A" "Apache error log"
+                 "S" "Apache SSL error log"
+                 "M" "System messages"
+		 "P" "Process list"
+		 "X" "Exit")
+
+	choices=$("${cmd[@]}" "${options[@]}" 2>&1 >/dev/tty)
+
+	for choice in $choices
+	do
+	    case $choice in
+		"T")
+		    utl_open_remote_log $(get_config_value "tomcatlog");
+		    ;;
+		"A")
+		    utl_open_remote_log $(get_config_value "apacheerror");
+		    ;;
+		"S")
+		    utl_open_remote_log $(get_config_value "apachessl");
+		    ;;
+		"M")
+		    utl_open_remote_log "/var/log/messages";
+		    ;;
+		"P")
+		    utl_open_remote_top;
+		    ;;
+		"X")
+		    clear
+		    exit
+		    ;;
+	    esac
+	done
+    done
+}
+
+
 function setup_init_environment() {
 #
 # Init all the environment
@@ -488,7 +565,9 @@ function setup_generate_config() {
 deploy target = $HOST
 default mode = $MODE
 tomcat version = 6
-
+tomcat log = /var/log/tomcat6/catalina.out
+apache error log = /var/log/httpd/error_log
+apache ssl error log = /var/log/httpd/ssl_error_log
 EOF
     echo "New config has been written: $ROOT/$CFG"
     echo
@@ -610,6 +689,7 @@ else
 	else
 	    usage;
 	fi
-	restart_services $HOST
+	restart_services $HOST;
+	setup_monitor;
     fi
 fi
