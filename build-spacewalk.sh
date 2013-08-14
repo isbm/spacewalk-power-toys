@@ -94,7 +94,7 @@ function get_config_value() {
 #
 # Get a configuration value
 #
-    eval "cat ./.build-spacewalk 2>/dev/null | awk '{if (\$1\$2 == \"$1\") print \$4}'"
+    eval "cat ./.build-spacewalk 2>/dev/null | sed 's/\s//g' | grep $1 | sed 's/.*=//g'"
 }
 
 
