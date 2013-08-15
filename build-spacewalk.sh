@@ -39,7 +39,7 @@
 #       to the main Spacewalk development environment.
 
 
-ABOUT="Automated Spacewalk Environment Tool, version 0.1"
+ABOUT="Automated Spacewalk Environment Tool, version 0.2"
 
 
 function check_env() {
@@ -94,7 +94,7 @@ function get_config_value() {
 #
 # Get a configuration value
 #
-    eval "cat ./.build-spacewalk 2>/dev/null | sed 's/\s//g' | grep $1 | sed 's/.*=//g'"
+    eval "cat ./.build-spacewalk 2>/dev/null | grep -v \# | sed 's/\s//g' | grep $1 | sed 's/.*=//g'"
 }
 
 
@@ -291,7 +291,21 @@ function utl_open_remote_top() {
 #
 # Opens top on the remote machine.
 #
-    ssh -t $USER@$HOST TERM=vt100 top
+    ssh -t $USER@$HOST TERM=$TERM $([ -z $(which htop) ] && echo top || echo $(which htop))
+}
+
+
+function utl_open_remote_dstat() {
+#
+# Opens dstat on the remote machine.
+#
+    clear
+    if [ -z $(which dstat) ]; then
+	echo "dstat is not found. Install first.";
+	read;
+    else
+	ssh -t $USER@$HOST TERM=$TERM dstat -cglmnpry --tcp
+    fi
 }
 
 
@@ -299,6 +313,14 @@ function setup_monitor() {
 #
 # Remote monitoring
 #
+    # Install required tools, if some missing.
+    for cmd in "htop" "dstat" "multitail" "tig"; do
+	LOC=`which $cmd 2>/dev/null`
+	if [ -z $LOC ]; then
+	    sudo yum --assumeyes install htop dstat multitail tig
+	fi
+    done
+
     while :
     do
 	cmd=(dialog --no-cancel --backtitle "$ABOUT" --title "Operations on $HOST" --menu "Select operations:" 0 0 0)
@@ -306,7 +328,8 @@ function setup_monitor() {
                  "A" "Apache error log"
                  "S" "Apache SSL error log"
                  "M" "System messages"
-		 "P" "Process list"
+		 "P" "Process list viewer"
+		 "D" "System resource statistics"
 		 "X" "Exit")
 
 	choices=$("${cmd[@]}" "${options[@]}" 2>&1 >/dev/tty)
@@ -318,16 +341,19 @@ function setup_monitor() {
 		    utl_open_remote_log $(get_config_value "tomcatlog");
 		    ;;
 		"A")
-		    utl_open_remote_log $(get_config_value "apacheerror");
+		    utl_open_remote_log $(get_config_value "apacheerrorlog");
 		    ;;
 		"S")
-		    utl_open_remote_log $(get_config_value "apachessl");
+		    utl_open_remote_log $(get_config_value "apachesslerrorlog");
 		    ;;
 		"M")
 		    utl_open_remote_log "/var/log/messages";
 		    ;;
 		"P")
 		    utl_open_remote_top;
+		    ;;
+		"D")
+		    utl_open_remote_dstat;
 		    ;;
 		"X")
 		    clear
@@ -565,9 +591,15 @@ function setup_generate_config() {
 deploy target = $HOST
 default mode = $MODE
 tomcat version = 6
+
+# Logs
 tomcat log = /var/log/tomcat6/catalina.out
 apache error log = /var/log/httpd/error_log
 apache ssl error log = /var/log/httpd/ssl_error_log
+
+# Tools
+# Enable or disable the remote monitor after dev operations.
+remote monitor = enable
 EOF
     echo "New config has been written: $ROOT/$CFG"
     echo
@@ -621,6 +653,8 @@ Modes:
     -a    Refresh all, web app and the binary.
 
     -l    Synchronize library with remote WEB-INF/lib
+
+    -m    Run monitor
 
     -h    This help message.
 
@@ -686,10 +720,16 @@ else
 	    deploy_binary;
 	elif [ "$MODE" = "-l" ]; then
 	    synchronize_webinf_lib;
+	elif [ "$MODE" = "-m" ]; then
+	    setup_monitor;
 	else
 	    usage;
 	fi
+
 	restart_services $HOST;
-	setup_monitor;
+
+	if [ $(get_config_value "remotemonitor") = "enable" ]; then
+	    setup_monitor;
+	fi
     fi
 fi
