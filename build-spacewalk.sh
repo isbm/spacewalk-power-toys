@@ -612,7 +612,7 @@ function header() {
 # Print header
 #
   cat << LINE
-RedHat Spacewalk builder and deployment tool, v 0.1.
+$ABOUT
 
 LINE
 }
