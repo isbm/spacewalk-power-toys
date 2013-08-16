@@ -143,7 +143,7 @@ function check_java_style() {
 	sudo yum --assumeyes install checkstyle
     fi
 
-    echo "Running checkstyle on java main sources"
+    echo "Running checkstyle on java main sources. This may take a while..."
 
     export CLASSPATH="build/classes"
     export BASE_OPTIONS="-Djavadoc.method.scope=public \
@@ -764,6 +764,7 @@ else
 	    setup_monitor;
 	elif [ "$MODE" = "-s" ]; then
 	    check_java_style;
+	    exit;
 	else
 	    usage;
 	fi
