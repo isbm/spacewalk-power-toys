@@ -135,6 +135,37 @@ function set_tomcat_version() {
 }
 
 
+function check_java_style() {
+#
+# Check Java code style
+#
+    if [ -z $(which checkstyle 2>/dev/null) ]; then
+	sudo yum --assumeyes install checkstyle
+    fi
+
+    echo "Running checkstyle on java main sources"
+
+    export CLASSPATH="build/classes"
+    export BASE_OPTIONS="-Djavadoc.method.scope=public \
+-Djavadoc.type.scope=package \
+-Djavadoc.var.scope=package \
+-Dcheckstyle.cache.file=build/checkstyle.cache.src \
+-Djavadoc.lazy=false \
+-Dcheckstyle.header.file=buildconf/LICENSE.txt"
+    find . -name *.java | grep -vE '(/test/|/jsp/|/playpen/)' | \
+	xargs checkstyle -c buildconf/checkstyle.xml
+    echo "Running checkstyle on java test sources"
+    export BASE_OPTIONS="-Djavadoc.method.scope=nothing \
+-Djavadoc.type.scope=nothing \
+-Djavadoc.var.scope=nothing \
+-Dcheckstyle.cache.file=build/checkstyle.cache.test \
+-Djavadoc.lazy=false \
+-Dcheckstyle.header.file=buildconf/LICENSE.txt"
+    find . -name *.java | grep -E '/test/' | grep -vE '(/jsp/|/playpen/)' | \
+	xargs checkstyle -c buildconf/checkstyle.xml
+}
+
+
 function rebuild_all() {
 #
 # Rebuild everything.
@@ -286,6 +317,13 @@ function utl_open_remote_log() {
     clear
 }
 
+function utl_open_remote_tail() {
+#
+# Opens top on the remote machine.
+#
+    ssh -t $USER@$HOST TERM=$TERM multitail -n 100 -i $1
+}
+
 
 function utl_open_remote_top() {
 #
@@ -314,10 +352,10 @@ function setup_monitor() {
 # Remote monitoring
 #
     # Install required tools, if some missing.
-    for cmd in "htop" "dstat" "multitail" "tig"; do
+    for cmd in "htop" "dstat" "multitail" "tig" "checkstyle"; do
 	LOC=`which $cmd 2>/dev/null`
 	if [ -z $LOC ]; then
-	    sudo yum --assumeyes install htop dstat multitail tig
+	    sudo yum --assumeyes install htop dstat multitail tig checkstyle
 	fi
     done
 
@@ -338,16 +376,16 @@ function setup_monitor() {
 	do
 	    case $choice in
 		"T")
-		    utl_open_remote_log $(get_config_value "tomcatlog");
+		    utl_open_remote_tail $(get_config_value "tomcatlog");
 		    ;;
 		"A")
-		    utl_open_remote_log $(get_config_value "apacheerrorlog");
+		    utl_open_remote_tail $(get_config_value "apacheerrorlog");
 		    ;;
 		"S")
-		    utl_open_remote_log $(get_config_value "apachesslerrorlog");
+		    utl_open_remote_tail $(get_config_value "apachesslerrorlog");
 		    ;;
 		"M")
-		    utl_open_remote_log "/var/log/messages";
+		    utl_open_remote_tail "/var/log/messages";
 		    ;;
 		"P")
 		    utl_open_remote_top;
@@ -654,6 +692,8 @@ Modes:
 
     -l    Synchronize library with remote WEB-INF/lib
 
+    -s    Check style
+
     -m    Run monitor
 
     -h    This help message.
@@ -722,6 +762,8 @@ else
 	    synchronize_webinf_lib;
 	elif [ "$MODE" = "-m" ]; then
 	    setup_monitor;
+	elif [ "$MODE" = "-s" ]; then
+	    check_java_style;
 	else
 	    usage;
 	fi
