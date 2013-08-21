@@ -139,11 +139,24 @@ function check_java_style() {
 #
 # Check Java code style
 #
+    PATTERN=$1
+    ALL=""
+    if [ -z $PATTERN ]; then
+	PATTERN="*.java"
+	ALL="1"
+    else
+	PATTERN="*"$(echo "$PATTERN" | sed 's/.java//g')"*.java"
+    fi
+
     if [ -z $(which checkstyle 2>/dev/null) ]; then
 	sudo yum --assumeyes install checkstyle
     fi
 
-    echo "Running checkstyle on java main sources. This may take a while..."
+    if [ -z $ALL ]; then
+	echo "Checking the style of certain Java sources."
+    else
+	echo "Checking the style of all Java sources. This may take a while..."
+    fi
 
     export CLASSPATH="build/classes"
     export BASE_OPTIONS="-Djavadoc.method.scope=public \
@@ -152,17 +165,26 @@ function check_java_style() {
 -Dcheckstyle.cache.file=build/checkstyle.cache.src \
 -Djavadoc.lazy=false \
 -Dcheckstyle.header.file=buildconf/LICENSE.txt"
-    find . -name *.java | grep -vE '(/test/|/jsp/|/playpen/)' | \
-	xargs checkstyle -c buildconf/checkstyle.xml
-    echo "Running checkstyle on java test sources"
-    export BASE_OPTIONS="-Djavadoc.method.scope=nothing \
+    find . -iname $PATTERN | grep -vE '(/test/|/jsp/|/playpen/)' | \
+	xargs checkstyle -c buildconf/checkstyle.xml | \
+	sed 's/\.\///' | \
+	sed 's/\//\n\//' | \
+	sed 's/:\s/\n\t/'
+
+    if [ ! -z $ALL ]; then
+	echo "Checking the stype of Java sources for testing"
+	export BASE_OPTIONS="-Djavadoc.method.scope=nothing \
 -Djavadoc.type.scope=nothing \
 -Djavadoc.var.scope=nothing \
 -Dcheckstyle.cache.file=build/checkstyle.cache.test \
 -Djavadoc.lazy=false \
 -Dcheckstyle.header.file=buildconf/LICENSE.txt"
-    find . -name *.java | grep -E '/test/' | grep -vE '(/jsp/|/playpen/)' | \
-	xargs checkstyle -c buildconf/checkstyle.xml
+	find . -name *.java | grep -E '/test/' | grep -vE '(/jsp/|/playpen/)' | \
+	    xargs checkstyle -c buildconf/checkstyle.xml | \
+	    sed 's/\.\///' | \
+	    sed 's/\//\n\//' | \
+	    sed 's/:\s/\n\t/'
+    fi
 }
 
 
@@ -692,16 +714,23 @@ Modes:
 
     -l    Synchronize library with remote WEB-INF/lib
 
-    -s    Check style
+    -s    Check style. Optionally, pass case-insensitive 
+          pattern that would match the file names. In this
+          case only these files will be checked.
+          For example, to find all Foo.java, BarFoo.java,
+          FredFooBar.java, SomefooHere.java etc, simply run:
+
+              $(basename $0) -s foo
 
     -m    Run monitor
 
     -h    This help message.
 
 Deployment host:
-        Specify a hostname to deploy on via SSH.
-        All commands are done from the "root" account,
-        so make sure you've deployed your keys there.
+
+          Specify a hostname to deploy on via SSH.
+          All commands are done from the "root" account,
+          so make sure you've deployed your keys there.
 
 LINE
 exit;
@@ -763,7 +792,7 @@ else
 	elif [ "$MODE" = "-m" ]; then
 	    setup_monitor;
 	elif [ "$MODE" = "-s" ]; then
-	    check_java_style;
+	    check_java_style $2;
 	    exit;
 	else
 	    usage;
