@@ -51,7 +51,7 @@ function check_env() {
                "ssh" "hostname" "awk" \
                "cat" "pwd" "curl" "sudo" \
                "sed" "yum" "grep" "basename" \
-               "dialog"; do
+               "dialog" "md5sum"; do
 	LOC=`which $cmd 2>/dev/null`
 	if [ -z $LOC ]; then
 	    echo "Error: '$cmd' is missing."
@@ -188,11 +188,60 @@ function check_java_style() {
 }
 
 
-function rebuild_all() {
+function clean_workspace() {
 #
-# Rebuild everything.
+# Remove all project-related items from the workspace. 
 #
     ant clean
+
+    ANTLIB_DIR="$HOME/.ant/lib"
+    SRC_LIB="$(pwd)/lib"
+
+    if [ ! -d "$ANTLIB_DIR" ]; then
+	mkdir -p $ANTLIB_DIR
+    fi
+
+    echo "Removing symbolic links to libraries in private Ant environment..."
+    for j in $(ls ./lib); do
+	MJ="$(md5sum $(echo $SRC_LIB/$j) | awk '{print $1}').jar"
+	if [ -f $ANTLIB_DIR/$MJ ]; then
+	    rm $ANTLIB_DIR/$MJ
+	    echo "    Removed: $j"
+	fi
+    done
+
+    echo
+    echo "Done"
+    echo
+}
+
+
+function rebuild_all() {
+#
+# Rebuild everything, assuming we are in the $SPACEWALK/java directory.
+#
+    ANTLIB_DIR="$HOME/.ant/lib"
+    SRC_LIB="$(pwd)/lib"
+    ant clean
+    ant resolve-ivy
+    if [ ! -d "$ANTLIB_DIR" ]; then
+	mkdir -p $ANTLIB_DIR
+    fi
+
+    echo "Adding symbolic links to the libraries into the private Ant environment..."
+    for j in $(ls ./lib); do
+	MJ="$(md5sum $(echo $SRC_LIB/$j) | awk '{print $1}').jar"
+	
+	if [ ! -f $ANTLIB_DIR/$MJ ]; then
+	    ln -s $SRC_LIB/$j $ANTLIB_DIR/$MJ 2>/dev/null;
+	    echo "    Added: $j"
+	fi
+    done
+
+    echo
+    echo "Done"
+    echo
+
     ant init-install compile
     ant unwar-webapp
 }
@@ -724,6 +773,9 @@ Modes:
 
     -m    Run monitor
 
+    -c    Cleanup workspace. This will remove everything related
+          to this project from your $HOME/.ant/lib and build/* directories.
+
     -h    This help message.
 
 Deployment host:
@@ -793,6 +845,9 @@ else
 	    setup_monitor;
 	elif [ "$MODE" = "-s" ]; then
 	    check_java_style $2;
+	    exit;
+	elif [ "$MODE" = "-c" ]; then
+	    clean_workspace;
 	    exit;
 	else
 	    usage;
