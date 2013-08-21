@@ -13,7 +13,7 @@ Turn your CentOS into Spacewalk appliance
 CentOS is the way to go.
 
 1. Get latest CentOS, network install, choose "Minimum".
-2. Place `bsp.sh` somewhere in your `~/bin` in `$PATH` on the _remote_ machine by using "curl".
+2. Place `bsp.sh` somewhere in your `~/bin` in `$PATH` on the _remote_ machine by using `curl`.
 3. Run: `bsp.sh --init-environment` and it will install missing packages on the _local_ machine.
 4. Run: `bsp.sh --install-spacewalk` and it will install the rest of the stuff on the _local_ machine.
 
