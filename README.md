@@ -25,4 +25,6 @@ Deploy your developed Spacewalk to the appliance
 2. Every time you need to refresh target _remote_ machine, run just `bsp.sh`.
 3. For more options, run `bsp.sh -h`
 
+**Note: This does update only to Java stack!** At least at the moment. Don't like it? Pull request, please.
+
 That's it.
