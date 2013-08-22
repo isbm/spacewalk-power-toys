@@ -69,8 +69,6 @@ function check_env() {
 	echo
 	exit;
     fi
-
-    exit;
 }
 
 
