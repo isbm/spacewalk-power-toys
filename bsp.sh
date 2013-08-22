@@ -46,14 +46,18 @@ function check_env() {
 #
 # Check if all required commands are in place.
 #
+    WARN=$1
     EXIT=""
     for cmd in "rsync" "ant" "javac" \
                "ssh" "hostname" "awk" \
                "cat" "pwd" "curl" "sudo" \
                "sed" "yum" "grep" "basename" \
                "dialog" "md5sum"; do
-	LOC=`which $cmd 2>/dev/null`
-	if [ -z $LOC ]; then
+	LOC=$(which $cmd 2>/dev/null)
+	LOC_CMD=$(echo $LOC | grep alias | awk '{print $1}')
+	if { [ "$LOC_CMD" == "alias" ] && [ ! -z $WARN ]; } then
+	    echo "Warning: Command \"$cmd\" is an alias to \"$(echo $LOC | grep alias)\""
+	elif [ -z "$LOC" ]; then
 	    echo "Error: '$cmd' is missing."
 	    EXIT="1"
 	fi
@@ -65,6 +69,8 @@ function check_env() {
 	echo
 	exit;
     fi
+
+    exit;
 }
 
 
@@ -709,6 +715,10 @@ apache ssl error log = /var/log/httpd/ssl_error_log
 # Tools
 # Enable or disable the remote monitor after dev operations.
 remote monitor = enable
+
+# Warnings
+display warnings = yes
+
 EOF
     echo "New config has been written: $ROOT/$CFG"
     echo
@@ -806,6 +816,11 @@ TOMCAT_VERSION=$(set_tomcat_version)
 if { [ "$MODE" = "-h" ] || [ "$MODE" = "" ]; } then
     usage;
 else
+    WARNINGS=""
+    if [ "$(get_config_value "displaywarnings")" = "yes" ]; then
+	WARNINGS="yes"
+    fi
+
     if [ "$MODE" = "--generate-config" ]; then
 	setup_generate_config $2 $3;
     elif [ "$MODE" = "--install-spacewalk" ]; then
@@ -813,12 +828,12 @@ else
 	setup_install_spacewalk;
     elif [ "$MODE" = "--init-environment" ]; then
 	can_sudo;
-	check_env;
+	check_env $WARNINGS;
 	setup_init_environment;
     else
         # Checks
 	can_sudo;
-	check_env;
+	check_env $WARNINGS;
 
 	if [ "$MODE" = "-r" ]; then
 	    correct_location;
