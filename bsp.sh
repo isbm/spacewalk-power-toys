@@ -724,6 +724,17 @@ EOF
     exit;
 }
 
+
+function git_push() {
+#
+# Push to the current origin.
+#
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    echo "Pushing to $BRANCH"
+    git push origin $BRANCH
+}
+
+
 function header() {
 #
 # Print header
@@ -782,9 +793,15 @@ Modes:
     -m    Run monitor
 
     -c    Cleanup workspace. This will remove everything related
-          to this project from your $HOME/.ant/lib and build/* directories.
+          to this project from your $HOME/.ant/lib and build/* directories. 
 
     -h    This help message.
+
+
+Commands:
+
+    --gp  Push to the current Git branch.
+
 
 Deployment host:
 
@@ -861,6 +878,9 @@ else
 	    exit;
 	elif [ "$MODE" = "-c" ]; then
 	    clean_workspace;
+	    exit;
+	elif [ "$MODE" = "--gp" ]; then
+	    git_push;
 	    exit;
 	else
 	    usage;
