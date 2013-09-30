@@ -267,6 +267,20 @@ function refresh_bin() {
 }
 
 
+function deploy_static() {
+#
+# Deploy static folders for Apache server (CSS, fonts, images etc).
+#
+    echo "Deploying static data"
+    DEST="/var/www/html"
+    for ROOT in "../web/html" "../branding"; do
+	for FOBJ in `ls $ROOT`; do
+	    echo "Syncing $FOBJ to $DEST"
+	    rsync -u -r --delete --verbose $ROOT/$FOBJ  $USER@$HOST:$DEST
+	done
+    done
+}
+
 function deploy_webapp() {
 #
 # Deploy only web (JSP) part of the application.
@@ -855,6 +869,7 @@ else
 	    rebuild_all;
 	    deploy_webapp;
 	    deploy_binary;
+	    deploy_static;
 	elif [ "$MODE" = "-w" ]; then
 	    correct_location;
 	    refresh_webapp;
