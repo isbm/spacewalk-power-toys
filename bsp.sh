@@ -129,6 +129,13 @@ function set_default_operation() {
     echo $([ -z $1 ] && get_config_value "defaultmode" || echo $1);
 }
 
+function set_sync_blacklist() {
+#
+# Spacewalk developers went mad and put branding things separately. Ouch, that hurts.
+#
+    echo get_config_value "syncblacklist";
+}
+
 
 function set_tomcat_version() {
 #
@@ -272,11 +279,12 @@ function deploy_static() {
 # Deploy static folders for Apache server (CSS, fonts, images etc).
 #
     echo "Deploying static data"
+    DEV_ROOT=`pwd`
     DEST="/var/www/html"
     for ROOT in "../web/html" "../branding"; do
 	for FOBJ in `ls $ROOT`; do
 	    echo "Syncing $FOBJ to $DEST"
-	    rsync -u -r --delete --verbose $ROOT/$FOBJ  $USER@$HOST:$DEST
+	    rsync -u -r --verbose --exclude-from "$DEV_ROOT/.build-spacewalk-blacklist" $ROOT/$FOBJ $USER@$HOST:$DEST
 	done
     done
 }
@@ -286,13 +294,14 @@ function deploy_webapp() {
 # Deploy only web (JSP) part of the application.
 #
     echo "Deploying webapp"
+    DEV_ROOT=`pwd`
     ROOT="build/webapp/rhnjava/WEB-INF";
     DEST="/var/lib/tomcat6/webapps/rhn/WEB-INF"
     ssh $USER@$HOST mkdir -p $DEST
     for FOBJ in `ls $ROOT`; do
 	if [ $FOBJ != "lib" ]; then
 	    echo "Syncing $FOBJ"
-	    rsync -u -r --delete --verbose $ROOT/$FOBJ  $USER@$HOST:$DEST
+	    rsync -u -r --delete --verbose --exclude-from "$DEV_ROOT/.build-spacewalk-blacklist" $ROOT/$FOBJ $USER@$HOST:$DEST
 	fi
     done
 }
@@ -303,13 +312,14 @@ function deploy_binary() {
 # Deploy only binary part of the application.
 #
     echo "Deploying binary"
+    DEV_ROOT=`pwd`
     ROOT="build/run-lib/rhn.jar";
     DEST="/usr/share/rhn/lib"
     ssh $USER@$HOST mkdir -p $DEST
     for FOBJ in "build/run-lib/rhn.jar"; do
 	FNAME=`basename $FOBJ`
 	echo "Syncing $FNAME"
-	rsync -u -r --delete --verbose $FOBJ  $USER@$HOST:$DEST/$FNAME
+	rsync -u -r --delete --verbose --exclude-from "$DEV_ROOT/.build-spacewalk-blacklist" $FOBJ $USER@$HOST:$DEST/$FNAME
     done
 }
 
@@ -515,7 +525,7 @@ function setup_init_environment() {
     done
 
     # Install stuff
-    sudo yum --assumeyes install openssh-clients rsync system-config-firewall > $OUTPUT &
+    sudo yum --assumeyes install openssh-clients rsync system-config-firewall ant-contrib ivy > $OUTPUT &
     dialog  --backtitle "$ABOUT" --clear --title "Installing additional packages" --tailbox $OUTPUT 20 70
     while [ `pgrep yum` ]; do # Bypass "Exit" while Yum is running
 	dialog  --backtitle "$ABOUT" --clear --title "Installing additional packages" --tailbox $OUTPUT 20 70
@@ -708,6 +718,7 @@ function setup_generate_config() {
 #
     ROOT=`pwd`
     CFG=".build-spacewalk"
+    BLKLST=".build-spacewalk-blacklist"
     MODE=$(set_default_operation $1)
     HOST=$(set_target_host $2)
     STAMP=`date`
@@ -731,8 +742,27 @@ remote monitor = enable
 # Warnings
 display warnings = yes
 
+# Spacewalk developerss gone mad. They've removed all the
+# branding into a separate packages and therefore it
+# only hurts everyone in their asses, once you re-deploy.
+
+sync black list = $ROOT/$BLKLST
+
 EOF
-    echo "New config has been written: $ROOT/$CFG"
+    echo "New config has been written into: $ROOT/$CFG"
+
+cat > $ROOT/$BLKLST <<EOF
+/var/www/html/css/spacewalk.css
+/var/www/html/fonts/glyphicons-halflings-regular.woff
+/var/www/html/fonts/glyphicons-halflings-regular.ttf
+/var/www/html/fonts/glyphicons-halflings-regular.svg
+/var/www/html/fonts/glyphicons-halflings-regular.eot
+/var/www/html/javascript/less.js
+/var/www/html/javascript/jquery.js
+/var/www/html/javascript/bootstrap.js
+
+EOF
+    echo "New black-list has been written into: $ROOT/$BLKLST"
     echo
 
     exit;
@@ -807,7 +837,7 @@ Modes:
     -m    Run monitor
 
     -c    Cleanup workspace. This will remove everything related
-          to this project from your $HOME/.ant/lib and build/* directories. 
+          to this project from your $HOME/.ant/lib and build/* directories.
 
     -h    This help message.
 
@@ -857,7 +887,7 @@ else
 	setup_install_spacewalk;
     elif [ "$MODE" = "--init-environment" ]; then
 	can_sudo;
-	check_env $WARNINGS;
+	#check_env $WARNINGS;
 	setup_init_environment;
     else
         # Checks
