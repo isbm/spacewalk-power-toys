@@ -1,0 +1,196 @@
+#!/usr/bin/perl -w
+
+use strict;
+use Getopt::Std;
+use Data::Dumper;
+use vars qw/ %cliarg /;
+
+my $SNAPSHOT_QEMU = "/usr/bin/qemu-img";
+my $TUNCTL = "/sbin/tunctl";
+
+my $CONFIG = ".runner.conf";
+my $DATE_SFX = `date +"%Y.%m.%d-%H%M%S"`;
+my $SNP_SFX = $DATE_SFX;
+
+chomp $DATE_SFX;
+
+# Default configuration
+my %CFG = (
+    'port' => 45,
+    'MAC' => "de:ad:be:ef:22:02",
+    'memory' => "2G"
+    );
+
+#
+# Main
+#
+sub main() {
+    my $opts = "hs:r:t:dn";
+    getopts("$opts", \%cliarg);
+    if ($cliarg{n}) {
+	&cleanup_tun_devices();
+    } elsif ($cliarg{s}) {
+	if ($cliarg{t}) {
+	    $SNP_SFX = $cliarg{t};
+	    $SNP_SFX =~ s/\s+/_/g;
+	    $SNP_SFX = lc($SNP_SFX);
+	}
+
+	if ($cliarg{d}) {
+	    $SNP_SFX .= "." . $DATE_SFX;
+	}
+	&snapshot($cliarg{s});
+    } elsif ($cliarg{r}) {
+	&run($cliarg{r});
+    } else {
+	&usage();
+    }
+}
+
+#
+# Print header
+#
+sub cli_header() {
+    print STDERR "KVM Image Runner, 0.1, Bloody Alpha.\n\n";
+}
+
+#
+# Print an error and go away.
+#
+sub cli_error() {
+    my $error_msg = shift;
+    if ($error_msg) {
+	&cli_header();
+	print STDERR "*** Error: $error_msg\n\n";
+    }
+    exit;
+}
+
+#
+# Run the image.
+#
+
+sub run() {
+    my $img_name = shift;
+    unless (-e $img_name) {
+	&cli_error("Unable to find \"$img_name\" to run it.");
+    }
+
+    &get_configuration();
+
+    $ENV{"MAC"} = $CFG{MAC};
+    system("/usr/local/bin/kvm-runimage -m $CFG{memory} -hda $img_name -vnc :$CFG{port}");
+}
+
+#
+# Cleanup TUN devices.
+#
+sub cleanup_tun_devices() {
+    my $me = `whoami`;
+    chomp($me);
+    if ($me !~ /root/) {
+	&cli_error("You have to be root. Try sudo, perhaps?");
+    }
+
+    unless (-e $TUNCTL) {
+	&cli_error("Cannot find $TUNCTL on the place.");
+    }
+
+    &cli_header();
+    my $i = 0;
+    print "Busy devices:$/";
+    for (0..255) {
+	if (system("$TUNCTL -d tap$_ > /dev/null 2>&1")) {
+	    print "\tTAP $_$/";
+	    $i++;
+	}
+    }
+    print ($i && "$i devices left active.\n\n" || "\tNo allocated devices found.\n\n");
+}
+
+#
+# Snapshot the image.
+#
+sub snapshot() {
+    my $img_name = shift;
+    unless (-e $SNAPSHOT_QEMU) {
+	&cli_error("Where is $SNAPSHOT_QEMU?..");
+    }
+
+    unless (-e $img_name) {
+	&cli_error("Image \"$img_name\" does not exists.");
+    }
+
+    my @imgtkn = split(/\./, $img_name);
+    my $ext = pop(@imgtkn);
+    my $n_img_name = join(".", @imgtkn) . "-$SNP_SFX.$ext";
+
+    print "Taking snapshot from:\n\t$img_name ...\n";
+    system("$SNAPSHOT_QEMU create -f qcow2 -b $img_name $n_img_name > /dev/null");
+    print "New snapshot has been saved to:\n\t$n_img_name\n\n";
+
+    exit;
+}
+
+#
+# Read configuration or create default.
+#
+sub get_configuration() {
+    unless (-e $CONFIG) {
+	# Saves the default configuration, hardcoded above of the script.
+	&save_configuration();
+    }
+
+    my $cfg_handle;
+    open($cfg_handle, $CONFIG) or &cli_error("Unable to open \"$CONFIG\" file.");
+
+    while (my $cfg_line = <$cfg_handle>) {
+	$cfg_line =~ s/\s//g;
+	chomp $cfg_line;
+	if (($cfg_line =~ /=/) && !($cfg_line =~ /^#/)) {
+	    my @cfg_set = split("=", $cfg_line);
+	    $CFG{$cfg_set[0]} = $cfg_set[1];
+	}
+    }
+
+    close($cfg_handle);
+}
+
+#
+# Save configuration.
+#
+sub save_configuration() {
+    my $cfg_handle;
+    if (!open($cfg_handle, "> $CONFIG")) {
+	&cli_error("Unable to write config to $CONFIG!");
+    }
+
+    foreach my $cfg_key (keys %CFG) {
+	print $cfg_handle "$cfg_key = $CFG{$cfg_key}\n";
+    }
+
+    close($cfg_handle);
+}
+
+
+#
+# Usage
+#
+sub usage() {
+    &cli_header();
+    print STDERR << "EOF";
+Commands:
+    -r      Run the image.
+    -n      Cleanup dead TUN devices.
+    -s      Snapshot the image.
+            Options:
+            -t      Title suffix for the snapshot image name. Date/time by default.
+            -d      Add current date/time to the custom title suffix.
+
+    -h      This help.
+
+EOF
+    exit;
+}
+
+main();
