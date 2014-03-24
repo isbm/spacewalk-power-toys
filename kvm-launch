@@ -2,13 +2,20 @@
 
 use strict;
 use Getopt::Std;
-use Data::Dumper;
+use File::Basename;
+use File::Path qw/make_path/;
 use vars qw/ %cliarg /;
+use POSIX ":sys_wait_h";
 
-my $SNAPSHOT_QEMU = "/usr/bin/qemu-img";
+my $QEMU_IMG = "/usr/bin/qemu-img";
+my $QEMU_KVM = "/usr/bin/qemu-kvm";
 my $TUNCTL = "/sbin/tunctl";
+my $IF_UP = "/etc/sysconfig/network/scripts/qemu-ifup";
+my $IF_DN = "/etc/sysconfig/network/scripts/qemu-ifdown";
 
-my $CONFIG = ".runner.conf";
+my $CONFIG = ".kvm-launch.conf";
+my $PIDFILE = ".kvm-launch.pid";
+my $PIDDB = "/tmp/kvm-launch";
 my $DATE_SFX = `date +"%Y.%m.%d-%H%M%S"`;
 my $SNP_SFX = $DATE_SFX;
 
@@ -16,6 +23,7 @@ chomp $DATE_SFX;
 
 # Default configuration
 my %CFG = (
+    'label' => "KVM instance",
     'port' => 45,
     'MAC' => "de:ad:be:ef:22:02",
     'memory' => "2G"
@@ -25,10 +33,19 @@ my %CFG = (
 # Main
 #
 sub main() {
-    my $opts = "hs:r:t:dni:";
+    &check_environment();
+
+    my $opts = "hs:r:t:dni:z:dl:";
     getopts("$opts", \%cliarg);
     if ($cliarg{n}) {
 	&cleanup_tun_devices();
+    } elsif ($cliarg{d}) {
+	if (!$cliarg{t}) {
+	    &cli_error("How to call your image?");
+	} elsif (!$cliarg{z}) {
+	    &cli_error("What is the size of your image in gigabytes?");
+	}
+	&create_disk_image($cliarg{z}, $cliarg{t});
     } elsif ($cliarg{s}) {
 	if ($cliarg{t}) {
 	    $SNP_SFX = $cliarg{t};
@@ -41,9 +58,35 @@ sub main() {
 	}
 	&snapshot($cliarg{s});
     } elsif ($cliarg{r}) {
-	&run($cliarg{r}, $cliarg{i});
+	&run($cliarg{r}, $cliarg{i}, $cliarg{l});
     } else {
 	&usage();
+    }
+}
+
+#
+# Check environment
+#
+sub check_environment() {
+    unless (-e $QEMU_IMG) {
+	&cli_error("Where is the $QEMU_IMG?..");
+    }
+
+    unless (-e $IF_UP || -e $IF_DN) {
+	&cli_error("Missing \"$IF_UP\" or \"$IF_DN\" script.");
+    }
+
+    unless (-e $QEMU_KVM) {
+	&cli_error("Where is the $QEMU_KVM?..");
+    }
+
+    unless (-e $TUNCTL) {
+	&cli_error("Cannot find $TUNCTL on the place.");
+    }
+
+    # Create pid db
+    unless (-e $PIDDB) {
+	&make_path($PIDDB);
     }
 }
 
@@ -69,28 +112,94 @@ sub cli_error() {
 #
 # Run the image.
 #
-
 sub run() {
     my $img_name = shift;
     my $iso_img = shift;
+    my $label = shift;
+
+    if (defined($label)) {
+	chomp $label;
+    }
+
+    &get_configuration();
+    unless ($label) {
+	unless ($CFG{label}) {
+	    $label = $img_name;
+	} else {
+	    $label = $CFG{label};
+	}
+    } else {
+	$label .= " - $img_name - ";
+    }
+
+    $label .= " (by " . `whoami` . ")";
+    $label =~ s/\n//g;
 
     unless (-e $img_name) {
 	&cli_error("Unable to find \"$img_name\" to run it.");
     }
 
-    &get_configuration();
+    $CFG{label} = $label;
 
-    if ($iso_img) {
-	unless (-e $iso_img) {
-	    &cli_error("Unable to run with ISO image \"$iso_img\".");
+    &save_configuration();
+    &run_kvm_image($label, $CFG{memory}, $CFG{MAC}, $img_name, $CFG{port}, $iso_img);
+}
+
+#
+# Run image util.
+#
+sub run_kvm_image() {
+    my $label = shift;
+    my $memory = shift;
+    my $macaddr = shift;
+    my $image = shift;
+    my $vnc_port = shift;
+    my $iso = shift;
+
+    if ($iso) {
+	unless (-e $iso) {
+	    &cli_error("Cannot find ISO image \"$iso\".");
 	}
-	$iso_img = "-cdrom $iso_img";
+	$iso = "-cdrom $iso";
     } else {
-	$iso_img = "";
+	$iso = "";
     }
 
-    $ENV{"MAC"} = $CFG{MAC};
-    system("/usr/local/bin/kvm-runimage -m $CFG{memory} -hda $img_name -vnc :$CFG{port} $iso_img");
+    my $me = `whoami`;
+    chomp $me;
+    if ($me =~ /root/) {
+	&cli_error("Trying to run this as root? Don't.");
+    }
+
+    `sudo chown root.kvm /dev/net/tun`;
+    `sudo chmod g+rw /dev/net/tun`;
+    my $iface = `sudo $TUNCTL -b -u $me -g kvm`;
+    chomp $iface;
+
+    my $pid;
+    defined($pid = fork()) || &cli_error("Unable to start: $!");
+    if ($pid) {
+	print "Attaching i-net interface $iface\n";
+	print "Access via VNC on port $vnc_port\n";
+
+	waitpid($pid, WNOHANG);
+	my @out = split(/\s+/, `ps ax | grep $macaddr | grep -v grep`);
+
+	my $pidfile;
+	if (-e $PIDDB) {
+	    $PIDFILE = $PIDDB . "/" . $out[0] . ".pid";
+	}
+
+	if (!open($pidfile, "> $PIDFILE")) {
+	    &cli_error("Oops, unable to save $PIDFILE!");
+	}
+
+	print $pidfile "$label\n";
+	close($pidfile);
+    } else {
+	system("$QEMU_KVM -net nic,macaddr=$macaddr -net tap,ifname=$iface,script=$IF_UP,downscript=$IF_DN -m $memory -hda $image -vnc :$vnc_port $iso");
+	exit;
+    }
 }
 
 #
@@ -103,11 +212,8 @@ sub cleanup_tun_devices() {
 	&cli_error("You have to be root. Try sudo, perhaps?");
     }
 
-    unless (-e $TUNCTL) {
-	&cli_error("Cannot find $TUNCTL on the place.");
-    }
-
     &cli_header();
+
     my $i = 0;
     print "Busy devices:$/";
     for (0..255) {
@@ -120,13 +226,29 @@ sub cleanup_tun_devices() {
 }
 
 #
+# Create disk image
+#
+sub create_disk_image() {
+    my $size = shift;
+    my $name = shift;
+
+    $name .= ".img";
+    $size .= "G";
+
+    if (-e $name) {
+	&cli_error("Image \"$name\" already exists.");
+    }
+
+    print "Creating image \"$name\", size of $size... ";
+    system("$QEMU_IMG create -f qcow2 $name $size > /dev/null 2>&1");
+    print "Done\n";
+}
+
+#
 # Snapshot the image.
 #
 sub snapshot() {
     my $img_name = shift;
-    unless (-e $SNAPSHOT_QEMU) {
-	&cli_error("Where is $SNAPSHOT_QEMU?..");
-    }
 
     unless (-e $img_name) {
 	&cli_error("Image \"$img_name\" does not exists.");
@@ -137,7 +259,7 @@ sub snapshot() {
     my $n_img_name = join(".", @imgtkn) . "-$SNP_SFX.$ext";
 
     print "Taking snapshot from:\n\t$img_name ...\n";
-    system("$SNAPSHOT_QEMU create -f qcow2 -b $img_name $n_img_name > /dev/null");
+    system("$QEMU_IMG create -f qcow2 -b $img_name $n_img_name > /dev/null");
     print "New snapshot has been saved to:\n\t$n_img_name\n\n";
 
     exit;
@@ -191,12 +313,19 @@ sub usage() {
     &cli_header();
     print STDERR << "EOF";
 Commands:
-    -r      Run the image.
+    -r   Run the image.
          Options:
-	    -i      ISO image (for installation)
+	    -l      Label of the instance for further listing. Image name is default.
+	    -i      Path to the ISO image during the installation.
 
-    -n      Cleanup dead TUN devices.
-    -s      Snapshot the image.
+    -d   Create the disk image (qcow2 format).
+         Parameters:
+            -t      Title (name) of the image.
+	    -z      Size (number) in gigabytes.
+
+    -n   Cleanup dead TUN devices (you need to be a r00t).
+
+    -s   Snapshot the image.
          Options:
             -t      Title suffix for the snapshot image name. Date/time by default.
             -d      Add current date/time to the custom title suffix.
