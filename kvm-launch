@@ -25,7 +25,7 @@ my %CFG = (
 # Main
 #
 sub main() {
-    my $opts = "hs:r:t:dn";
+    my $opts = "hs:r:t:dni:";
     getopts("$opts", \%cliarg);
     if ($cliarg{n}) {
 	&cleanup_tun_devices();
@@ -41,7 +41,7 @@ sub main() {
 	}
 	&snapshot($cliarg{s});
     } elsif ($cliarg{r}) {
-	&run($cliarg{r});
+	&run($cliarg{r}, $cliarg{i});
     } else {
 	&usage();
     }
@@ -72,14 +72,25 @@ sub cli_error() {
 
 sub run() {
     my $img_name = shift;
+    my $iso_img = shift;
+
     unless (-e $img_name) {
 	&cli_error("Unable to find \"$img_name\" to run it.");
     }
 
     &get_configuration();
 
+    if ($iso_img) {
+	unless (-e $iso_img) {
+	    &cli_error("Unable to run with ISO image \"$iso_img\".");
+	}
+	$iso_img = "-cdrom $iso_img";
+    } else {
+	$iso_img = "";
+    }
+
     $ENV{"MAC"} = $CFG{MAC};
-    system("/usr/local/bin/kvm-runimage -m $CFG{memory} -hda $img_name -vnc :$CFG{port}");
+    system("/usr/local/bin/kvm-runimage -m $CFG{memory} -hda $img_name -vnc :$CFG{port} $iso_img");
 }
 
 #
@@ -181,9 +192,12 @@ sub usage() {
     print STDERR << "EOF";
 Commands:
     -r      Run the image.
+         Options:
+	    -i      ISO image (for installation)
+
     -n      Cleanup dead TUN devices.
     -s      Snapshot the image.
-            Options:
+         Options:
             -t      Title suffix for the snapshot image name. Date/time by default.
             -d      Add current date/time to the custom title suffix.
 
