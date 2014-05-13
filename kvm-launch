@@ -1,4 +1,36 @@
 #!/usr/bin/perl -w
+#
+# Copyright (c) 2013, SUSE Linux Products GmbH
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification,
+# are permitted provided that the following conditions are met:
+#
+# Redistributions of source code must retain the above copyright notice,
+# this list of conditions and the following disclaimer. Redistributions in binary 
+# form must reproduce the above copyright notice, this list of conditions and the
+# following disclaimer in the documentation and/or other materials provided with
+# the distribution.
+#
+# Neither the name of the SUSE Linux Products GmbH nor the names of its contributors
+# may be used to endorse or promote products derived from this software without
+# specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+# IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+# OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+# OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+# OF THE POSSIBILITY OF SUCH DAMAGE. 
+#
+#
+# KVM images launcher.
+#
+# Author: Bo Maryniuk <bo@suse.de>
 
 use strict;
 use Getopt::Std;
@@ -15,9 +47,12 @@ my $IF_DN = "/etc/sysconfig/network/scripts/qemu-ifdown";
 
 my $CONFIG = ".kvm-launch.conf";
 my $PIDFILE = ".kvm-launch.pid";
-my $PIDDB = "/tmp/kvm-launch";
+my $PIDDB = "/tmp/kvm-launch-dev";
 my $DATE_SFX = `date +"%Y.%m.%d-%H%M%S"`;
+chomp $DATE_SFX;
 my $SNP_SFX = $DATE_SFX;
+
+my $SEP = "::";
 
 chomp $DATE_SFX;
 
@@ -34,12 +69,13 @@ my %CFG = (
 #
 sub main() {
     &check_environment();
+    &cleanup_zombie_pids();
 
-    my $opts = "hs:r:t:dni:z:dl:";
+    my $opts = "hs:r:t:cni:z:dl:k:qfm:a:p:";
     getopts("$opts", \%cliarg);
     if ($cliarg{n}) {
 	&cleanup_tun_devices();
-    } elsif ($cliarg{d}) {
+    } elsif ($cliarg{c}) {
 	if (!$cliarg{t}) {
 	    &cli_error("How to call your image?");
 	} elsif (!$cliarg{z}) {
@@ -59,6 +95,31 @@ sub main() {
 	&snapshot($cliarg{s});
     } elsif ($cliarg{r}) {
 	&run($cliarg{r}, $cliarg{i}, $cliarg{l});
+    } elsif ($cliarg{q}) {
+	&list_running_images();
+    } elsif ($cliarg{k}) {
+	&kill_KVM_process($cliarg{k});
+    } elsif ($cliarg{f}) {
+	&get_configuration();
+	if ($cliarg{l}) {
+	    $CFG{label} = $cliarg{l};
+	}
+
+	if ($cliarg{p}) {
+	    $CFG{port} = $cliarg{p};
+	}
+
+	if ($cliarg{a}) {
+	    $CFG{MAC} = $cliarg{a};
+	}
+
+	if ($cliarg{m}) {
+	    my $mem = $cliarg{m};
+	    $mem =~ s/\D//g;
+	    $CFG{memory} = $mem . "G";
+	}
+	&save_configuration();
+	print "Configuration has been saved to $CONFIG file." . $/;
     } else {
 	&usage();
     }
@@ -87,6 +148,7 @@ sub check_environment() {
     # Create pid db
     unless (-e $PIDDB) {
 	&make_path($PIDDB);
+	chmod 0775, $PIDDB;
     }
 }
 
@@ -98,15 +160,31 @@ sub cli_header() {
 }
 
 #
-# Print an error and go away.
+# Print an error.
 #
 sub cli_error() {
-    my $error_msg = shift;
-    if ($error_msg) {
+    &cli_out("Error", shift, 1);
+}
+
+#
+# Print an info.
+#
+sub cli_info() {
+    &cli_out("Info", shift);
+}
+
+#
+# Print an out msg and go away.
+#
+sub cli_out() {
+    my $prefix = shift;
+    my $msg = shift;
+    my $quit = shift;
+    if ($msg) {
 	&cli_header();
-	print STDERR "*** Error: $error_msg\n\n";
+	print STDERR "*** $prefix: $msg\n\n";
     }
-    exit;
+    exit if ($quit);
 }
 
 #
@@ -128,20 +206,23 @@ sub run() {
 	} else {
 	    $label = $CFG{label};
 	}
-    } else {
-	$label .= " - $img_name - ";
     }
 
-    $label .= " (by " . `whoami` . ")";
     $label =~ s/\n//g;
+
+    # Check if we already have such label running
+    my @pidmap = &get_pid_map();
+    foreach my $pdref (@pidmap) {
+	my %pd = %{$pdref};
+	if (uc($label) eq uc($pd{label})) {
+	    &cli_error("Sorry, but \"$pd{label}\" is already running. You don't want to mess with that.");
+	}
+    }
 
     unless (-e $img_name) {
 	&cli_error("Unable to find \"$img_name\" to run it.");
     }
 
-    $CFG{label} = $label;
-
-    &save_configuration();
     &run_kvm_image($label, $CFG{memory}, $CFG{MAC}, $img_name, $CFG{port}, $iso_img);
 }
 
@@ -155,6 +236,9 @@ sub run_kvm_image() {
     my $image = shift;
     my $vnc_port = shift;
     my $iso = shift;
+
+    my $uid = `whoami`;
+    $uid =~ s/\n//g;
 
     if ($iso) {
 	unless (-e $iso) {
@@ -194,8 +278,9 @@ sub run_kvm_image() {
 	    &cli_error("Oops, unable to save $PIDFILE!");
 	}
 
-	print $pidfile "$label\n";
+	print $pidfile "$label$SEP$image$SEP$uid\n";
 	close($pidfile);
+	chmod 0664, $pidfile;
     } else {
 	system("$QEMU_KVM -net nic,macaddr=$macaddr -net tap,ifname=$iface,script=$IF_UP,downscript=$IF_DN -m $memory -hda $image -vnc :$vnc_port $iso");
 	exit;
@@ -259,10 +344,128 @@ sub snapshot() {
     my $n_img_name = join(".", @imgtkn) . "-$SNP_SFX.$ext";
 
     print "Taking snapshot from:\n\t$img_name ...\n";
-    system("$QEMU_IMG create -f qcow2 -b $img_name $n_img_name > /dev/null");
+    system "$QEMU_IMG create -f qcow2 -b $img_name $n_img_name > /dev/null";
     print "New snapshot has been saved to:\n\t$n_img_name\n\n";
 
     exit;
+}
+
+#
+# Get pid map
+#
+sub get_pid_map() {
+    my @pidmap = ();
+    opendir(PDB, $PIDDB) or &cli_error($!);
+    while (my $fpid = readdir(PDB)) {
+	if ($fpid =~ "pid") {
+	    open FPID, "$PIDDB/$fpid" or &cli_error($!);
+	    binmode FPID;
+	    my $piddata = <FPID>;
+	    close FPID;
+	    chomp $piddata;
+	    $fpid =~ s/\D//g;
+	    my @pdt = split("::", $piddata);
+	    if ($#pdt != 2) {
+		&cli_error("The index of running KVM images is either corrupted or no longer compatible.\n\n"
+			   . "    If you've upgraded KVM Launcher, then the format has been changed.\n"
+			   . "    It may be other reasons (you edited something manually etc).\n"
+			   . "    Please kill all KVM instances and remove $PIDDB directory, start all again.");
+	    }
+
+	    my %pd = (
+		"pid" => $fpid,
+		"label" => $pdt[0],
+		"localfilename" => $pdt[1],
+		"uid" => $pdt[2],
+		);
+	    my $ref = \%pd;
+	    push(@pidmap, $ref);
+	}
+    }    
+
+    return @pidmap;
+}
+
+#
+# Formatting bit. Adds three dots, if the string is too long.
+#
+
+sub trm {
+    my($width, $string) = @_;
+    if (length($string) > $width) {
+        return(substr($string, 0, $width - 3) . "...");
+    }
+    else {
+        return($string);
+    }
+}
+
+#
+# List running images.
+#
+sub list_running_images() {
+    my @pidmap = &get_pid_map();
+    if (!@pidmap) {
+	&cli_info("No known KVM images running at the moment.");
+	exit;
+    }
+
+    my ($pid, $uid, $label, $imgname);
+
+    format STDOUT_TOP =
+PID      UID       Label                Image name
+=================================================================================
+.
+    format STDOUT = 
+@<<<<<<  @<<<<<<<< @<<<<<<<<<<<<<<<<<<< @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+trm(6, $pid), trm(8, $uid), trm(20, $label), trm(40, $imgname)
+.
+
+    foreach my $pdref (@pidmap) {
+	my %pd = %{$pdref};
+	$pid = $pd{pid};
+        $uid = $pd{uid};
+        $label = $pd{label};
+        $imgname = $pd{localfilename};
+        write;
+    }
+}
+
+#
+# Cleanup zombie pids
+#
+sub cleanup_zombie_pids() {
+    my @pidmap = &get_pid_map();
+    foreach my $pdref (@pidmap) {
+	my %pd = %{$pdref};
+	my $running = kill 0, $pd{pid};
+	my $pidf = "$PIDDB/$pd{pid}.pid";
+	if (!$running && -e $pidf) {
+	    unlink $pidf;
+	}
+    }
+}
+
+#
+# Kill KVM process
+#
+sub kill_KVM_process() {
+    my $param = shift;
+    my @pidmap = &get_pid_map();
+    foreach my $pdref (@pidmap) {
+	my %pd = %{$pdref};
+	if (("$param" eq "$pd{pid}") || (uc("$param") eq uc($pd{label}))) {
+	    kill 9, $pd{pid};
+	    my $pidf = "$PIDDB/$pd{pid}.pid";
+	    if (-e $pidf) {
+		unlink $pidf;
+	    }
+	    &cli_info("KVM instance \"$pd{label}\" running on \"$pd{localfilename}\" image has been terminated.");
+	    return;
+	}
+    }
+
+    &cli_error("Could not find any KVM instance, matching \"$param\" criteria.");
 }
 
 #
@@ -298,6 +501,8 @@ sub save_configuration() {
 	&cli_error("Unable to write config to $CONFIG!");
     }
 
+    $CFG{MAC} = &process_mac_address($CFG{MAC});
+
     foreach my $cfg_key (keys %CFG) {
 	print $cfg_handle "$cfg_key = $CFG{$cfg_key}\n";
     }
@@ -305,6 +510,35 @@ sub save_configuration() {
     close($cfg_handle);
 }
 
+#
+# Processes MAC address. Allows to write them without a semicolumns.
+#
+sub process_mac_address() {
+    my $mac = uc shift;
+
+    $mac =~ s/\://g;
+    $mac =~ s/[^0-9ABCDEF]//g;
+    my @tokens = split //, "$mac";
+    $mac = "";
+
+    if ($#tokens != 11) {
+	&cli_error("Your MAC address looks wrong. No need to use that column thing, but keep it real.");
+    }
+
+    my $idx = 0;
+    for my $p (0 .. 11) {
+	$mac .= $tokens[$p];
+	$idx++;
+	if ($idx > 1) {
+	    $idx = 0;
+	    if ($p < 11) {
+		$mac .= ":";
+	    }
+	}
+    }
+
+    return $mac;
+}
 
 #
 # Usage
@@ -318,7 +552,7 @@ Commands:
 	    -l      Label of the instance for further listing. Image name is default.
 	    -i      Path to the ISO image during the installation.
 
-    -d   Create the disk image (qcow2 format).
+    -c   Create the disk image (qcow2 format).
          Parameters:
             -t      Title (name) of the image.
 	    -z      Size (number) in gigabytes.
@@ -330,7 +564,18 @@ Commands:
             -t      Title suffix for the snapshot image name. Date/time by default.
             -d      Add current date/time to the custom title suffix.
 
-    -h      This help.
+    -q   List running KVM images.
+
+    -f   Generate default configuration.
+         Options:
+            -l      Label of the image
+	    -p      Port for the VNC
+	    -a      MAC address
+	    -m      Memory (default 2Gb)
+
+    -k   Force stop running KVM image (kills the process instantly).
+
+    -h   This help.
 
 EOF
     exit;
