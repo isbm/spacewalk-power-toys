@@ -432,13 +432,24 @@ trm(6, $pid), trm(8, $uid), trm(20, $label), trm(40, $imgname)
 }
 
 #
+# Check PID running
+#
+
+sub is_running() {
+    my $pid = shift;
+    my @proc_data = split(/\s+:\s+/, `ps uax | awk '{print \$1,":",\$2}' | grep $pid`);
+    return (@proc_data && $proc_data[1] == $pid) ? $proc_data[0] : undef;
+}
+
+
+#
 # Cleanup zombie pids
 #
 sub cleanup_zombie_pids() {
     my @pidmap = &get_pid_map();
     foreach my $pdref (@pidmap) {
 	my %pd = %{$pdref};
-	my $running = kill 0, $pd{pid};
+	my $running = &is_running($pd{pid});
 	my $pidf = "$PIDDB/$pd{pid}.pid";
 	if (!$running && -e $pidf) {
 	    unlink $pidf;
