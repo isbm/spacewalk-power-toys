@@ -44,6 +44,7 @@ my $QEMU_KVM = "/usr/bin/qemu-kvm";
 my $TUNCTL = "/sbin/tunctl";
 my $IF_UP = "/etc/sysconfig/network/scripts/qemu-ifup";
 my $IF_DN = "/etc/sysconfig/network/scripts/qemu-ifdown";
+my $VNCVIEWER = "/usr/bin/vncviewer";
 
 my $CONFIG = ".kvm-launch.conf";
 my $PIDFILE = ".kvm-launch.pid";
@@ -55,6 +56,9 @@ my $SNP_SFX = $DATE_SFX;
 my $SEP = "::";
 
 chomp $DATE_SFX;
+my $X11_ENV_ERROR = $ENV{"DISPLAY"} eq "" 
+       ? "INFO: Use X11 forwarding for this." : 
+         (-e $VNCVIEWER) ? "" : "WARNING: install vncviewer first!";
 
 # Default configuration
 my %CFG = (
@@ -71,7 +75,7 @@ sub main() {
     &check_environment();
     &cleanup_zombie_pids();
 
-    my $opts = "hs:r:t:cni:z:dl:k:qfm:a:p:";
+    my $opts = "hs:r:t:cni:z:dl:k:qfm:a:p:v:";
     getopts("$opts", \%cliarg);
     if ($cliarg{n}) {
 	&cleanup_tun_devices();
@@ -120,6 +124,8 @@ sub main() {
 	}
 	&save_configuration();
 	print "Configuration has been saved to $CONFIG file." . $/;
+    } elsif ($cliarg{v}) {
+	&open_vnc_to_remote($cliarg{v});
     } else {
 	&usage();
     }
@@ -278,7 +284,7 @@ sub run_kvm_image() {
 	    &cli_error("Oops, unable to save $PIDFILE!");
 	}
 
-	print $pidfile "$label$SEP$image$SEP$uid\n";
+	print $pidfile "$label$SEP$image$SEP$uid$SEP$vnc_port\n";
 	close($pidfile);
 	chmod 0664, $pidfile;
     } else {
@@ -365,7 +371,7 @@ sub get_pid_map() {
 	    chomp $piddata;
 	    $fpid =~ s/\D//g;
 	    my @pdt = split("::", $piddata);
-	    if ($#pdt != 2) {
+	    if ($#pdt != 3) {
 		&cli_error("The index of running KVM images is either corrupted or no longer compatible.\n\n"
 			   . "    If you've upgraded KVM Launcher, then the format has been changed.\n"
 			   . "    It may be other reasons (you edited something manually etc).\n"
@@ -377,6 +383,7 @@ sub get_pid_map() {
 		"label" => $pdt[0],
 		"localfilename" => $pdt[1],
 		"uid" => $pdt[2],
+		"vncport" => $pdt[3],
 		);
 	    my $ref = \%pd;
 	    push(@pidmap, $ref);
@@ -522,6 +529,29 @@ sub save_configuration() {
 }
 
 #
+# Open VNC viewer
+#
+sub open_vnc_to_remote() {
+    my $param = shift;
+    my @pidmap = &get_pid_map();
+    undef my $opened;
+    foreach my $pdref (@pidmap) {
+	my %pd = %{$pdref};
+	if (("$param" eq "$pd{pid}") || (uc("$param") eq uc($pd{label}))) {
+	    if ($X11_ENV_ERROR eq "") {
+	        system("$VNCVIEWER localhost:$pd{vncport} > /dev/null 2>/dev/null & disown");
+	        print "Opened VNC for $pd{label} at port $pd{vncport}\n";
+	    }
+	    $opened = 1;
+        }
+    }
+
+    unless (defined $opened) {
+        &cli_error("Could not find an instance with the PID or label called \"$param\"");
+    }
+}
+
+#
 # Processes MAC address. Allows to write them without a semicolumns.
 #
 sub process_mac_address() {
@@ -584,6 +614,7 @@ Commands:
 	    -a      MAC address
 	    -m      Memory (default 2Gb)
 
+    -v   Open VNC $X11_ENV_ERROR
     -k   Force stop running KVM image (kills the process instantly).
 
     -h   This help.
