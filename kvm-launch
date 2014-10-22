@@ -47,7 +47,7 @@ my $IF_DN = "/etc/sysconfig/network/scripts/qemu-ifdown";
 
 my $CONFIG = ".kvm-launch.conf";
 my $PIDFILE = ".kvm-launch.pid";
-my $PIDDB = "/tmp/kvm-launch";
+my $PIDDB = $ENV{"HOME"} . "/tmp/kvm-launch";
 my $DATE_SFX = `date +"%Y.%m.%d-%H%M%S"`;
 chomp $DATE_SFX;
 my $SNP_SFX = $DATE_SFX;
