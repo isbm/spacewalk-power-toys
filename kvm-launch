@@ -162,7 +162,7 @@ sub check_environment() {
 # Print header
 #
 sub cli_header() {
-    print STDERR "KVM Image Runner, 0.1, Bloody Alpha.\n\n";
+    print STDERR "KVM Image Runner, 0.3, no longer Alpha.\n\n";
 }
 
 #
