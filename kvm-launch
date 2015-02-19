@@ -273,8 +273,18 @@ sub run_kvm_image() {
 	print "Access via VNC on port $vnc_port\n";
 
 	waitpid($pid, WNOHANG);
-	my @out = split(/\s+/, `ps ax | grep $macaddr | grep -v grep`);
-
+	my $try = 0;
+	my @out;
+	while (1) {
+	    @out = split(/\s+/, `ps ax | grep $macaddr | grep -v grep`);
+	    if (($try > 5) || ($out[0])) {
+	        last;
+	    } else {
+		print "Waiting for the process to complete.\n";
+		sleep 1;
+	    }
+	    $try++;
+        }
 	my $pidfile;
 	if (-e $PIDDB) {
 	    $PIDFILE = $PIDDB . "/" . $out[0] . ".pid";
