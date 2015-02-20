@@ -56,9 +56,9 @@ my $SNP_SFX = $DATE_SFX;
 my $SEP = "::";
 
 chomp $DATE_SFX;
-my $X11_ENV_ERROR = $ENV{"DISPLAY"} eq "" 
-       ? "INFO: Use X11 forwarding for this." : 
-         (-e $VNCVIEWER) ? "" : "WARNING: install vncviewer first!";
+my $X11_ENV_ERROR = ((!exists $ENV{"DISPLAY"}) || ($ENV{"DISPLAY"} eq "")) 
+       ? "ERROR: Unable to open VNC without X11 forwarding." : 
+         (-e $VNCVIEWER) ? "" : "ERROR: install vncviewer first!";
 
 # Default configuration
 my %CFG = (
@@ -285,6 +285,7 @@ sub run_kvm_image() {
 	    }
 	    $try++;
         }
+	# Loop for wait, it is just slow
 	my $pidfile;
 	if (-e $PIDDB) {
 	    $PIDFILE = $PIDDB . "/" . $out[0] . ".pid";
@@ -551,8 +552,11 @@ sub open_vnc_to_remote() {
 	    if ($X11_ENV_ERROR eq "") {
 	        system("$VNCVIEWER localhost:$pd{vncport} > /dev/null 2>/dev/null & disown");
 	        print "Opened VNC for $pd{label} at port $pd{vncport}\n";
+		$opened = 1;
+	    } else {
+	        print $X11_ENV_ERROR . $/;
+		$opened = 0;
 	    }
-	    $opened = 1;
         }
     }
 
